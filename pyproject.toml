@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-memory-stack"
+version = "0.1.0"
+description = "本地语义记忆栈 — BGE-M3 + ChromaDB + GLiNER，MPS加速，纯本地运行"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "User", email = "repo-owner@gmail.com"}]
+
+dependencies = [
+    "sentence-transformers>=3.0",
+    "chromadb>=0.5",
+    "gliner>=0.2",
+    "torch>=2.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+server = ["fastapi", "uvicorn"]
+
+[project.scripts]
+local-memory = "local_memory_stack.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
