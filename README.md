@@ -20,6 +20,26 @@ Most memory layers for AI agents require cloud APIs, external databases, or paid
 
 **Think of it as a semantic brain for your AI agent** — write facts in natural language, retrieve them with fuzzy queries, and let the system handle deduplication, archival, and graph-based reasoning automatically.
 
+## How It Compares
+
+| | Local Memory Stack | mem0 | Zep | supermemory |
+|---|---|---|---|---|
+| **Requires API keys** | ❌ None | ✅ LLM provider key | ✅ Cloud API | ✅ OpenAI + Pinecone |
+| **Data leaves device** | ❌ Never | Depends on LLM config | ✅ Cloud-first | ✅ Cloud services |
+| **External services** | None | Vector DB (optional) | Zep Cloud | Turso + Redis + Pinecone |
+| **Setup** | `pip install -e .` | `pip install mem0ai` | Docker / Cloud signup | Docker + env vars |
+| **Deduplication** | ✅ 3-tier pipeline | ✅ Basic | ✅ Basic | ❌ |
+| **Entity extraction** | ✅ GLiNER (local) | ✅ Via LLM | ✅ Via LLM | ❌ |
+| **TTL / Auto-archive** | ✅ Tag-based | ❌ | ❌ | ❌ |
+| **Graph-guided search** | ✅ Cluster + neighbor | ❌ | ❌ | ✅ Graph view |
+| **Reranker** | ✅ BGE-M3 two-stage | ❌ | ❌ | ❌ |
+| **Quality gate** | ✅ 5-layer filter | ❌ | ❌ | ❌ |
+| **License** | Apache-2.0 | Apache-2.0 | Apache-2.0 (server: BUSL) | AGPL-3.0 |
+
+**When to choose Local Memory Stack:** You want a memory layer that works offline, costs nothing to run, and doesn't send your data to external APIs. Especially suited for privacy-sensitive use cases, local-first agent setups, and environments without reliable internet.
+
+**When to choose mem0/Zep:** You need managed cloud infrastructure, team collaboration features, or prefer to offload compute to external services.
+
 ## Quickstart
 
 ### Install
