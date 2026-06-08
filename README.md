@@ -1,281 +1,318 @@
-# 🧠 本地记忆栈（Local Memory Stack）
+<div align="center">
 
-> 纯本地语义记忆系统 — 零联网、零 API Key、零外部服务。  
-> 文本存进去 → 自动理解含义 → 用大白话就能搜出来。
+# 🧠 Local Memory Stack
+
+**Semantic memory engine for AI agents. 100% local. Zero API keys. Zero cloud.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Hermes Agent](https://img.shields.io/badge/Hermes_Agent-Plugin-green.svg)](https://hermes-agent.nousresearch.com)
+
+[Quickstart](#quickstart) · [Features](#features) · [Hermes Integration](#hermes-integration) · [API Reference](#api-reference) · [Architecture](#architecture)
+
+</div>
 
 ---
 
-## 它能干什么？
+## Why Local Memory Stack?
 
-| 能力 | 说明 |
-|------|------|
-| 🔍 **语义搜索** | "宠物" 搜到 "猫"、"房租" 搜到 "月租3000" — 不用记关键词 |
-| 🔄 **写入去重** | 同一个事实存两次？自动合并，不会出现 3 条重复记录 |
-| 🏷️ **自动标注** | 每条记忆自动提取人名/地点/事件标签 |
-| ⏳ **TTL 自动归档** | 记忆带存活时间，超龄自动归档，不污染日常上下文 |
-| 📬 **文件邮箱** | Agent/Cron 间零依赖消息传递 |
-| 🔎 **混合检索 + 图引导** | 向量 + BM25 + RRF 融合，图引导加速 3-157x |
-| ⚡ **不卡写入** | 实体提取后台异步，写入 741ms 完成 |
-| 🔌 **框架无关** | 纯 Python 类，换任何 Agent 框架都能用 |
+Most memory layers for AI agents require cloud APIs, external databases, or paid services. Local Memory Stack runs entirely on your machine — embeddings, vector search, entity extraction, everything. Your data never leaves your device.
 
----
+**Think of it as a semantic brain for your AI agent** — write facts in natural language, retrieve them with fuzzy queries, and let the system handle deduplication, archival, and graph-based reasoning automatically.
 
-## 快速开始
+## Quickstart
+
+### Install
 
 ```bash
-# 克隆
 git clone https://github.com/keven221/local-memory-stack.git
 cd local-memory-stack
 
-# 安装
 python3 -m venv venv && source venv/bin/activate
 pip install -e .
+```
 
-# 启动服务
+> First run downloads ~3.3 GB of models (BGE-M3 + GLiNER). Subsequent starts are instant.
+
+### Run as a Service
+
+```bash
 python3 -m uvicorn src.local_memory_stack.server:app --port 8900
 ```
 
-首次启动会自动下载模型（约 3.3GB），之后秒级启动。
-
-### 30 秒体验
+### Use in Python
 
 ```python
 from local_memory_stack import MemoryEngine
 
 engine = MemoryEngine()
 
-# 存记忆
-engine.write("咪咪是张三养的橘猫串串", source="profile", tags=["pet"])
+# Write a memory
+engine.write("The cat's name is Mimi, a tabby mix", source="profile", tags=["pet"])
 
-# 用白话搜
-results = engine.query("张三养了什么宠物？", top_k=3)
+# Search with natural language
+results = engine.query("what pet does the user have?", top_k=3)
 for r in results:
     print(f"[{r.similarity:.0%}] {r.text}")
-# → [92%] 咪咪是张三养的橘猫串串
+# → [92%] The cat's name is Mimi, a tabby mix
 ```
 
 ---
 
-## 架构
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| 🔍 **Semantic Search** | "pet" finds "cat", "rent" finds "$3000/month" — no keyword matching needed |
+| 🔄 **Auto Deduplication** | 3-tier pipeline: embedding recall → keyword overlap → merge/skip decisions |
+| 🏷️ **Entity Extraction** | Automatic NER (people, places, events) via GLiNER, runs async in background |
+| ⏳ **TTL & Auto-Archive** | Memories expire based on tags (30d–365d), archived without deletion |
+| 📊 **Reranker** | Two-stage retrieval: HNSW fast recall → BGE-M3 precise reranking |
+| 🕸️ **Graph-Guided Search** | Cluster-aware retrieval with neighbor expansion, 3–157× faster on large datasets |
+| 🔀 **Hybrid Search** | BM25 keyword + vector search with Reciprocal Rank Fusion |
+| 🚫 **Quality Gate** | 5-layer filtering blocks noise: code artifacts, task status, trivial chat |
+| 📬 **File Mailbox** | Zero-dependency message passing between agents / cron jobs |
+| ⚡ **Async NER** | Entity extraction runs in background — writes complete in ~50 ms |
+| 🔌 **Framework-Agnostic** | Pure Python class. Works with any agent framework or standalone |
+
+---
+
+## Hermes Integration
+
+Local Memory Stack ships as a first-class [Hermes Agent](https://hermes-agent.nousresearch.com) plugin. After `pip install -e .`, it auto-registers as a memory provider.
+
+### Setup
+
+```bash
+# Install into Hermes's Python environment
+cd local-memory-stack
+pip install -e .
+
+# Configure
+hermes config set memory.provider local-memory-stack
+```
+
+### What It Does
+
+| Capability | How It Works |
+|-----------|-------------|
+| **Auto-sync conversations** | Each user→assistant turn is quality-gated and written as a memory (skips trivial exchanges) |
+| **Prefetch context** | Before every LLM call, top-5 relevant memories are injected via semantic recall |
+| **`recall_memory` tool** | Agent can actively search memory with ranked + reranked results |
+| **Session-end extraction** | Key facts are extracted from the full session and persisted on shutdown |
+| **Pre-compress preservation** | Before context compaction, important memories are saved to prevent loss |
+
+### How It Looks
+
+Memories are injected into the system prompt as:
 
 ```
-你的一句话
+<memory-context>
+[1] (2026-06-07 | preference) User prefers dark theme for coding
+[2] (2026-06-05 | project) Local memory stack has 146 memories stored
+</memory-context>
+```
+
+The agent can also call `recall_memory(query="...", top_k=5)` at any time for deeper retrieval.
+
+---
+
+## Architecture
+
+```
+Your text
     ↓
 ┌─────────────┐
-│  BGE-M3     │  ← 嵌入模型（2.2GB），把文字变成 1024 维向量
-│  翻译官      │     "张三的猫" → [0.12, -0.34, 0.56, ...]
+│  BGE-M3     │  Embedding model (2.2 GB) — text → 1024-dim vectors
 └──────┬──────┘
        ↓
 ┌─────────────┐     ┌─────────────┐
-│  ChromaDB   │ ←──→│  GLiNER     │  ← 实体提取（1.1GB），后台异步
-│  图书馆管理员 │     │  标注员      │     "张三在杭州" → 张三(人)、杭州(地)
+│  ChromaDB   │ ←──→│  GLiNER     │  NER model (1.1 GB), async background
+│  Vector DB  │     │  Entity Tag │  "John in NYC" → John(person), NYC(location)
 └──────┬──────┘     └─────────────┘
        ↓
 ┌─────────────┐
-│  归档层      │  ← TTL 过期的记忆自动移到这里
-│  冷存储      │     不注入上下文，但随时能搜回来
+│  Archive    │  Expired memories move here (searchable, not injected)
+│  Cold Store │  3-tier: Active → Archive → Cleanup
 └─────────────┘
 ```
 
-三个模型各司其职，全部跑在本地，不联网。
+**All models run locally. No network calls. No API keys.**
 
 ---
 
-## API 接口
+## API Reference
 
-### 记忆操作
+### Memory Operations
 
 ```bash
-# 写入（自动去重 + 自动标注 + 自动计算 TTL）
+# Write (auto-dedup + auto-tag + auto-TTL)
 curl -X POST http://127.0.0.1:8900/memory/write \
   -H "Content-Type: application/json" \
-  -d '{"text":"记忆内容","source":"api","tags":["preference"]}'
+  -d '{"text":"memory content", "source":"api", "tags":["preference"]}'
 
-# 搜索（只搜活跃记忆）
+# Search active memories
 curl -X POST http://127.0.0.1:8900/memory/query \
   -H "Content-Type: application/json" \
-  -d '{"text":"搜索内容","top_k":5}'
+  -d '{"text":"search query", "top_k":5}'
 
-# 搜索全部（活跃 + 归档）
+# Search with reranker (two-stage)
+curl -X POST http://127.0.0.1:8900/memory/query_rerank \
+  -H "Content-Type: application/json" \
+  -d '{"text":"search query", "top_k":3}'
+
+# Search all (active + archived)
 curl -X POST http://127.0.0.1:8900/memory/search_all \
   -H "Content-Type: application/json" \
-  -d '{"text":"搜索内容","top_k":5}'
+  -d '{"text":"search query", "top_k":5}'
 
-# 统计
+# Stats
 curl http://127.0.0.1:8900/memory/stats
 ```
 
-### 归档管理
+### Archive Management
 
 ```bash
-# 预览归档（dry-run）
+# Preview archive (dry-run)
 curl -X POST http://127.0.0.1:8900/memory/archive -d '{"dry_run":true}'
 
-# 执行归档
+# Execute archive
 curl -X POST http://127.0.0.1:8900/memory/archive -d '{"dry_run":false}'
 
-# 搜索归档
+# Search archived memories
 curl -X POST http://127.0.0.1:8900/memory/archive/search \
-  -H "Content-Type: application/json" -d '{"text":"搜索内容"}'
+  -H "Content-Type: application/json" -d '{"text":"query"}'
 
-# 从归档恢复
+# Restore from archive
 curl -X POST http://127.0.0.1:8900/memory/archive/restore \
   -H "Content-Type: application/json" -d '{"ids":["mem_xxx"]}'
 ```
 
----
+### TTL Defaults
 
-## TTL 机制
+| Tag | TTL | Use Case |
+|-----|-----|----------|
+| `temporary` | 30 days | Appointments, short-lived tasks |
+| `dynamic` | 180 days | Projects, ongoing goals |
+| `static` / `preference` / `feedback` | 365 days | Identity, long-term preferences |
+| *(no tag)* | 180 days | Default |
 
-每条记忆写入时自动计算存活时间：
+### Quality Gate
 
-| 标签 | TTL | 适用场景 |
-|------|-----|---------|
-| `temporary` | 30 天 | 临时事项、约会安排 |
-| `dynamic` | 180 天 | 项目进展、阶段性目标 |
-| `static` / `preference` / `feedback` | 365 天 | 用户身份、长期偏好 |
-| 无标签 | 180 天 | 默认 |
+Memories are filtered through 5 layers before storage:
 
-**三层存储：**
-
-| 层级 | 状态 | 用途 |
-|------|------|------|
-| 🟢 活跃层 | TTL 内 | 自动注入上下文，日常搜索 |
-| 🟡 归档层 | TTL 超期 | 不注入上下文，`search_all` 可查 |
-| 🔴 清理层 | 归档 365 天未引用 | 可选永久删除 |
-
-```bash
-# 维护脚本
-python3 memory_ttl_cleanup.py --stats      # 统计
-python3 memory_ttl_cleanup.py              # 预览
-python3 memory_ttl_cleanup.py --execute    # 执行归档
-python3 memory_ttl_cleanup.py --backfill   # 为旧记忆补填 TTL
-```
+1. **Min length** — rejects text < 10 characters
+2. **Noise patterns** — blocks file paths, git hashes, CI status messages
+3. **Code artifacts** — filters Python/JS imports, class definitions, stack traces
+4. **Task status** — blocks "Phase done", "Step completed" type messages
+5. **Chat noise** — filters trivial acknowledgments ("ok", "got it", "haha")
 
 ---
 
-## 文件邮箱
+## Retrieval Modes
 
-Agent/Cron 间零依赖消息传递。每个消息是一个 JSON 文件，写入邮箱目录即投递。
-
-```python
-from mailbox import Mailbox
-
-mb = Mailbox()
-
-# 发送
-mb.send("cron-research", subject="发现", body="详细内容", sender="agent")
-
-# 接收
-msgs = mb.list("cron-research", status="unread")
-msg = mb.read("cron-research")  # 自动标记已读
-mb.ack("cron-research", msg["id"])
-
-# 统计
-mb.stats()
-```
+### 1. Graph-Guided Search (recommended for large datasets)
 
 ```bash
-# 命令行
-python3 mailbox.py send --to my-box --subject "主题" --body "内容"
-python3 mailbox.py list --box my-box
-python3 mailbox.py read --box my-box
-python3 mailbox.py stats
-python3 mailbox.py cleanup
+python3 graph_retrieval.py "search query"
 ```
 
-消息存储在 `~/.hermes/mailbox/<box>/msg_xxx.json`，默认 72 小时过期。
+Cluster localization → in-cluster BM25 → neighbor expansion. Index cached 24h.
 
----
-
-## 检索方式
-
-### 1. 图引导检索（首选，3-157x 加速）
+### 2. Hybrid Search (fallback)
 
 ```bash
-python3 graph_retrieval.py "搜索内容"
+python3 hybrid_search.py "search query"
 ```
 
-两阶段：聚类定位（毫秒）→ 簇内 BM25 → 邻居扩展。索引缓存 24h，新记忆后需 `--rebuild`。
+Vector + BM25 + RRF fusion. Works when graph index has no match.
 
-### 2. 混合检索（兜底）
-
-```bash
-python3 hybrid_search.py "搜索内容"
-```
-
-向量 + BM25 关键词 + RRF 融合，适合图引导无结果时 fallback。
-
-### 3. REST API（通用）
+### 3. REST API (universal)
 
 ```bash
-curl -X POST http://127.0.0.1:8900/memory/query \
+curl -X POST http://127.0.0.1:8900/memory/query_rerank \
   -H "Content-Type: application/json" \
-  -d '{"text":"搜索内容","top_k":5,"threshold":0.3}'
+  -d '{"text":"search query","top_k":3}'
 ```
 
 ---
 
-## 维护
+## Maintenance
 
 ```bash
-# 事实冲突检测 + 低频衰减 + 语义去重 + LLM 审核
+# Conflict detection + stale memory cleanup
 python3 maintenance.py
 
-# TTL 归档清理
-python3 memory_ttl_cleanup.py --execute
+# TTL archival
+python3 memory_ttl_cleanup.py --stats      # Statistics
+python3 memory_ttl_cleanup.py              # Preview
+python3 memory_ttl_cleanup.py --execute    # Execute archive
+python3 memory_ttl_cleanup.py --backfill   # Backfill TTL for old records
 
-# 记忆备份
+# Backup
 python3 memory_backup.py
 ```
 
 ---
 
-## 性能
+## Performance
 
-| 操作 | 耗时 | 说明 |
-|------|------|------|
-| 首次启动 | ~12s | 加载 3.3GB 模型到内存 |
-| 写入一条记忆 | ~741ms | BGE-M3 编码 + ChromaDB 写入 |
-| 搜索 5 条结果 | ~50ms | BGE-M3 编码 + HNSW 检索 |
-| 实体提取 | ~2s | 后台异步，不阻塞写入 |
-| 10 万条数据查询 | <100ms | HNSW O(log N) |
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| Cold start | ~12s | Model loading (one-time) |
+| Write (with dedup) | ~50 ms | After model warmup |
+| Semantic search | ~17 ms | Vector-only, warm cache |
+| Reranked search | ~35 ms | HNSW recall + BGE-M3 rerank |
+| Single read | ~0.1 ms | Direct ChromaDB lookup |
+| Entity extraction | ~2s | Async background, non-blocking |
+| 100K records query | <100 ms | HNSW O(log N) |
 
-测试环境：Apple Silicon (MPS GPU)
+Benchmarked on Apple Silicon (MPS). CUDA and CPU also supported.
 
 ---
 
-## 项目结构
+## Tech Stack
+
+| Component | Model | Size | Role |
+|-----------|-------|------|------|
+| BGE-M3 | BAAI/bge-m3 | 2.2 GB | Text → 1024-dim embeddings |
+| ChromaDB | — | — | Vector database + HNSW index |
+| GLiNER | gliner_multi-v2.1 | 1.1 GB | Named entity recognition |
+
+Zero external API dependencies. Everything runs locally.
+
+---
+
+## Project Structure
 
 ```
 local-memory-stack/
 ├── src/local_memory_stack/
-│   ├── engine.py              ← ⭐ 核心引擎（去重 + TTL + 归档）
-│   ├── server.py              ← FastAPI REST 服务
-│   └── cli.py                 ← 命令行工具
-├── mailbox.py                 ← 文件邮箱（Agent 间消息传递）
-├── hybrid_search.py           ← 混合检索（向量 + BM25 + RRF）
-├── graph_retrieval.py         ← 图引导检索（聚类加速）
-├── memory_ttl_cleanup.py      ← TTL 归档维护脚本
-├── maintenance.py             ← 事实冲突 + 语义去重 + LLM 审核
-├── memory_backup.py           ← 记忆备份
-├── tests/                     ← 测试套件
-├── chroma_data/               ← 记忆数据库（gitignore）
-└── README.md
+│   ├── engine.py              ← Core engine (dedup + TTL + archive + reranker)
+│   ├── server.py              ← FastAPI REST service
+│   ├── cli.py                 ← CLI tool
+│   ├── hermes_plugin.py       ← Hermes Agent plugin entry point
+│   └── hermes_memory_provider.py  ← Hermes MemoryProvider implementation
+├── mailbox.py                 ← File-based inter-agent messaging
+├── hybrid_search.py           ← Hybrid retrieval (vector + BM25 + RRF)
+├── graph_retrieval.py         ← Graph-guided retrieval (cluster acceleration)
+├── memory_ttl_cleanup.py      ← TTL archival maintenance
+├── maintenance.py             ← Conflict detection + semantic dedup
+├── memory_backup.py           ← Memory backup utility
+├── tests/                     ← Test suite
+├── chroma_data/               ← Memory database (gitignored)
+└── plugin.yaml                ← Hermes plugin manifest
 ```
 
 ---
 
-## 部署
+## Deployment
 
-### macOS（launchd 开机自启）
+### macOS (launchd auto-start)
 
 ```bash
-# 创建 plist
-cat > ~/Library/LaunchAgents/com.local-memory-stack.plist << EOF
+# Create plist
+cat > ~/Library/LaunchAgents/com.local-memory-stack.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -284,7 +321,7 @@ cat > ~/Library/LaunchAgents/com.local-memory-stack.plist << EOF
     <string>com.local-memory-stack</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$(which python3)</string>
+        <string>/usr/bin/python3</string>
         <string>-m</string>
         <string>uvicorn</string>
         <string>src.local_memory_stack.server:app</string>
@@ -292,7 +329,7 @@ cat > ~/Library/LaunchAgents/com.local-memory-stack.plist << EOF
         <string>8900</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>$PWD</string>
+    <string>/path/to/local-memory-stack</string>
     <key>RunAtLoad</key>
     <true/>
 </dict>
@@ -302,32 +339,24 @@ EOF
 launchctl load ~/Library/LaunchAgents/com.local-memory-stack.plist
 ```
 
-### 迁移
-
-```bash
-# 1. 复制项目目录（chroma_data 必须带上）
-scp -r local-memory-stack/ 新机器:~/projects/
-
-# 2. 安装
-cd ~/projects/local-memory-stack
-python3 -m venv venv && source venv/bin/activate
-pip install -e .
-
-# 3. 启动（首次会下载模型）
-python3 -m uvicorn src.local_memory_stack.server:app --port 8900
-```
+### Docker (coming soon)
 
 ---
 
-## 技术栈
+## Contributing
 
-| 组件 | 模型 | 大小 | 作用 |
-|------|------|------|------|
-| BGE-M3 | BAAI/bge-m3 | 2.2GB | 文本 → 1024 维向量 |
-| ChromaDB | — | — | 向量数据库 + HNSW 索引 |
-| GLiNER | gliner_multi-v2.1 | 1.1GB | 实体提取（人名/地点/事件） |
+Contributions welcome! Please open an issue first to discuss what you'd like to change.
 
-零外部 API 依赖，全部跑在本地。
+```bash
+# Development setup
+git clone https://github.com/keven221/local-memory-stack.git
+cd local-memory-stack
+python3 -m venv venv && source venv/bin/activate
+pip install -e ".[dev]"
+
+# Run tests
+pytest tests/
+```
 
 ---
 

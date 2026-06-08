@@ -74,7 +74,7 @@ def main() -> None:
             list_times.append(ms)
         print(f"list: {summarize(list_times)}")
 
-        queries = ["Kevin", "探索 Agent", "闲鱼收入", "语言 去重 中文 英文", "项目 记忆 栈"]
+        queries = ["test", "exploring agents", "language dedup", "project memory stack", "search benchmark"]
         for _ in range(args.queries):
             for text in queries:
                 ms, _ = post("/memory/query", {"text": text, "top_k": 5, "threshold": 0})

@@ -91,19 +91,7 @@ async def query_memory(req: QueryRequest):
     entries = engine.query(req.text, top_k=req.top_k, threshold=req.threshold, source=req.source)
     return {
         "query": req.text,
-        "results": [
-            {
-                "id": e.id,
-                "text": e.text,
-                "similarity": e.similarity,
-                "metadata": {
-                    "source": e.source,
-                    "tags": e.tags,
-                    "entities": e.entities,
-                },
-            }
-            for e in entries
-        ],
+        "results": [e.to_dict() for e in entries],
         "count": len(entries),
     }
 
@@ -117,19 +105,7 @@ async def query_rerank(req: RerankRequest):
     )
     return {
         "query": req.text,
-        "results": [
-            {
-                "id": e.id,
-                "text": e.text,
-                "similarity": e.similarity,
-                "metadata": {
-                    "source": e.source,
-                    "tags": e.tags,
-                    "entities": e.entities,
-                },
-            }
-            for e in entries
-        ],
+        "results": [e.to_dict() for e in entries],
         "count": len(entries),
         "reranked": True,
         "retrieve_k": req.retrieve_k,
@@ -204,11 +180,7 @@ async def search_archived(req: QueryRequest):
     entries = engine.search_archived(req.text, top_k=req.top_k, threshold=req.threshold)
     return {
         "query": req.text,
-        "results": [
-            {"id": e.id, "text": e.text, "similarity": e.similarity,
-             "metadata": {"source": e.source, "tags": e.tags, "entities": e.entities}}
-            for e in entries
-        ],
+        "results": [e.to_dict() for e in entries],
         "count": len(entries),
     }
 
@@ -225,14 +197,8 @@ async def search_all_memories(req: SearchAllRequest):
     result = engine.search_all(req.text, top_k=req.top_k, threshold=req.threshold)
     return {
         "query": req.text,
-        "active": [
-            {"id": e.id, "text": e.text, "similarity": e.similarity}
-            for e in result["active"]
-        ],
-        "archived": [
-            {"id": e.id, "text": e.text, "similarity": e.similarity}
-            for e in result["archived"]
-        ],
+        "active": [e.to_dict() for e in result["active"]],
+        "archived": [e.to_dict() for e in result["archived"]],
         "total": result["total"],
     }
 

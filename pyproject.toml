@@ -27,5 +27,12 @@ server = ["fastapi", "uvicorn"]
 [project.scripts]
 local-memory = "local_memory_stack.cli:main"
 
+# Hermes Agent plugin discovery entry point
+[project.entry-points."hermes.plugins"]
+local-memory-stack = "local_memory_stack.hermes_plugin"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+local_memory_stack = ["../hermes-plugin/plugin.yaml"]

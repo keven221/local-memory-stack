@@ -2,7 +2,7 @@
 
 不依赖 V1 引擎的重型模型加载，直接调 V1 的 HTTP API。
 用法:
-    results = hybrid_search("Kevin的薪资", top_k=5)
+    results = hybrid_search("salary information", top_k=5)
 """
 import math
 import re
@@ -124,7 +124,7 @@ def hybrid_search(query: str, top_k: int = 5, vector_weight: float = 0.6) -> Lis
 
 if __name__ == "__main__":
     import sys
-    q = sys.argv[1] if len(sys.argv) > 1 else "Kevin"
+    q = sys.argv[1] if len(sys.argv) > 1 else "test query"
     results = hybrid_search(q, top_k=5)
     for r in results:
         print(f"[{r['score']:.4f}] (v{r['vector_rank']} k{r['bm25_rank']}) {r['text'][:80]}")

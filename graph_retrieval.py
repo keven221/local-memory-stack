@@ -11,7 +11,7 @@
 用法：
     from graph_retrieval import GraphRetriever
     r = GraphRetriever()
-    results = r.search("Kevin的薪资", top_k=5)
+    results = r.search("salary information", top_k=5)
 """
 
 import json
@@ -389,7 +389,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="图引导记忆检索")
-    parser.add_argument("query", nargs="?", default="Kevin", help="搜索查询")
+    parser.add_argument("query", nargs="?", default="test query", help="搜索查询")
     parser.add_argument("--top-k", type=int, default=5, help="返回条数")
     parser.add_argument("--rebuild", action="store_true", help="重建索引")
     parser.add_argument("--no-cluster", action="store_true", help="禁用聚类")

@@ -32,3 +32,19 @@ backups/
 *.heapsnapshot
 graph_index.json
 venv/
+
+# Generated visualization
+memory_graph.html
+nodes_data.js
+
+# Local plugin duplicate
+hermes-plugin/
+
+# Third-party JS libs (vis.js, tom-select)
+lib/
+
+# Backup files
+*.bak
+
+# Mailbox data (user-specific)
+mailbox/

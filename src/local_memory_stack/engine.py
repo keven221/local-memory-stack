@@ -52,9 +52,16 @@ TAG_TTL_DAYS = {
 }
 DEFAULT_TTL_DAYS = 180  # 无标签时的默认 TTL
 
+# ── 图索引重建全局状态 ────────────────────────
+_GRAPH_REBUILD_COOLDOWN = 15  # 冷却期：连续写入只触发一次重建
+_graph_rebuild_pending = False
+_graph_rebuild_timer: Optional[threading.Timer] = None
+_graph_rebuild_lock = threading.Lock()
+
 
 @dataclass
 class MemoryEntry:
+    """标准记忆条目，统一查询返回类型。"""
     id: str
     text: str
     source: str = ""
@@ -65,6 +72,21 @@ class MemoryEntry:
     created_at: str = ""
     updated_at: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典（API 返回前调用）。"""
+        return {
+            "id": self.id,
+            "text": self.text,
+            "source": self.source,
+            "tags": self.tags,
+            "entities": self.entities,
+            "similarity": self.similarity,
+            "merged_count": self.merged_count,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": self.metadata,
+        }
 
 
 class MemoryEngine:
@@ -121,10 +143,8 @@ class MemoryEngine:
         )
         logger.info(f"ChromaDB 就绪 (活跃: {self._collection.count()}, 归档: {self._archive.count()})")
 
-        from gliner import GLiNER
-        logger.info("加载 GLiNER...")
-        self._ner = GLiNER.from_pretrained("urchade/gliner_multi-v2.1")
-        logger.info(f"GLiNER 就绪 ({time.time()-t0:.1f}s 总计)")
+        # GLiNER changed to lazy loading: loaded on first extract_entities/_extract_async call
+        logger.info(f"Models ready ({time.time()-t0:.1f}s total)")
 
     @staticmethod
     def _extract_keywords(text: str) -> list:
@@ -287,6 +307,16 @@ class MemoryEngine:
         if any(re.search(p, t) for p in task_noise):
             return False
 
+        # ── 闲聊 / 低信息量 ──
+        chat_noise = [
+            r'^(?:今天|昨晚|中午|早上)(?:吃了|喝了|看了|玩了).{2,10}$',
+            r'^(?:好开心|好难过|好累|好困|好饿|哈哈|呵呵|嘻嘻)',
+            r'^(?:天气|心情|感觉)(?:真|好|很|太).{1,6}$',
+            r'^(?:我|他|她)(?:今天|昨天|刚才)(?:吃了|喝了|看了)',
+        ]
+        if any(re.match(p, t) for p in chat_noise):
+            return False
+
         return True
 
     def _add_new(self, text, vector, source, tags, timestamp, auto_extract) -> dict:
@@ -299,8 +329,11 @@ class MemoryEngine:
                     ttl = TAG_TTL_DAYS[t]  # 取最短的（最具体的标签优先）
         if ttl is None:
             ttl = DEFAULT_TTL_DAYS
+        from datetime import timedelta
+        expire_dt = datetime.fromisoformat(timestamp) + timedelta(days=ttl)
         meta = {"source": source, "created_at": timestamp, "merged_count": "0",
-                "ttl_days": str(ttl), "last_accessed_at": timestamp}
+                "ttl_days": str(ttl), "last_accessed_at": timestamp,
+                "expire_at": expire_dt.isoformat()}
         if tags:
             meta["tags"] = json.dumps(tags, ensure_ascii=False)
 
@@ -315,8 +348,8 @@ class MemoryEngine:
         if auto_extract:
             self._extract_async(mem_id, text)
 
-        # 写入成功后异步重建图索引（不阻塞返回）
-        self._rebuild_graph_index_async()
+        # 写入成功后调度图索引重建（去重 + 合并触发）
+        self._schedule_graph_rebuild()
 
         return {"id": mem_id, "text": text[:200], "action": "added", "metadata": meta}
 
@@ -450,43 +483,78 @@ class MemoryEngine:
 
     # ── 图索引自动重建 ────────────────────────
 
-    def _rebuild_graph_index_async(self):
-        """后台异步重建图索引。"""
-        def _run():
-            try:
-                import subprocess
-                import sys as _sys
-                venv_python = os.path.join(
-                    os.path.expanduser("~/projects/local-memory-stack"), "venv", "bin", "python3"
-                )
-                python = venv_python if os.path.exists(venv_python) else _sys.executable
-                result = subprocess.run(
-                    [python, "graph_retrieval.py", "--rebuild"],
-                    cwd=os.path.expanduser("~/projects/local-memory-stack"),
-                    capture_output=True, text=True, timeout=60,
-                )
-                if result.returncode == 0:
-                    logger.info("图索引重建完成")
-                else:
-                    logger.warning(f"图索引重建失败: {result.stderr[:200]}")
-            except Exception as e:
-                logger.warning(f"图索引重建异常: {e}")
+    @staticmethod
+    def _schedule_graph_rebuild():
+        """调度图索引重建：去重 + 合并触发 + 冷却间隔。
 
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
+        多次写入/删除在冷却期内合并为一次重建，
+        避免频繁 fork 子进程。
+        """
+        global _graph_rebuild_pending, _graph_rebuild_timer, _graph_rebuild_lock
+
+        with _graph_rebuild_lock:
+            if _graph_rebuild_pending:
+                return  # 已有待执行任务，忽略本次触发
+            _graph_rebuild_pending = True
+
+            def _do_rebuild():
+                global _graph_rebuild_pending, _graph_rebuild_timer
+                try:
+                    import subprocess
+                    import sys as _sys
+                    venv_python = os.path.join(
+                        os.path.expanduser("~/projects/local-memory-stack"), "venv", "bin", "python3"
+                    )
+                    python = venv_python if os.path.exists(venv_python) else _sys.executable
+                    result = subprocess.run(
+                        [python, "graph_retrieval.py", "--rebuild"],
+                        cwd=os.path.expanduser("~/projects/local-memory-stack"),
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    if result.returncode == 0:
+                        logger.info("图索引重建完成")
+                    else:
+                        logger.warning(f"图索引重建失败: {result.stderr[:200]}")
+                except Exception as e:
+                    logger.warning(f"图索引重建异常: {e}")
+                finally:
+                    with _graph_rebuild_lock:
+                        _graph_rebuild_pending = False
+                        _graph_rebuild_timer = None
+
+            # 冷却计时器：距上次重建至少间隔 _GRAPH_REBUILD_COOLDOWN 秒
+            t = threading.Timer(_GRAPH_REBUILD_COOLDOWN, _do_rebuild)
+            t.daemon = True
+            _graph_rebuild_timer = t
+            t.start()
 
     # ── 实体提取 ────────────────────────────
 
+    def _ensure_ner(self):
+        """Lazy-load GLiNER (saves ~1.1GB VRAM until first use)."""
+        if self._ner is not None:
+            return
+        with self._ner_lock:
+            if self._ner is not None:
+                return
+            from gliner import GLiNER
+            logger.info("Lazy loading GLiNER...")
+            t0 = time.time()
+            self._ner = GLiNER.from_pretrained("urchade/gliner_multi-v2.1")
+            logger.info(f"GLiNER ready ({time.time()-t0:.1f}s)")
+
     def extract_entities(self, text: str, labels: Optional[List[str]] = None,
                          threshold: float = 0.3) -> List[Dict[str, Any]]:
-        """提取实体（同步，用于调试）。"""
+        """Extract entities (sync). Lazy-loads GLiNER on first call."""
+        self._ensure_ner()
         with self._ner_lock:
             return self._ner.predict_entities(text, labels or DEFAULT_ENTITY_LABELS, threshold=threshold)
 
     def _extract_async(self, mem_id: str, text: str):
-        """后台异步提取实体并更新 metadata。"""
+        """Background async entity extraction. Lazy-loads GLiNER on first call."""
         def _run():
             try:
+                self._ensure_ner()
                 with self._ner_lock:
                     entities = self._ner.predict_entities(text, DEFAULT_ENTITY_LABELS, threshold=0.3)
                 if entities:
@@ -557,6 +625,7 @@ class MemoryEngine:
         unique_ids = list(set(ids))
         try:
             self._collection.delete(ids=unique_ids)
+            self._schedule_graph_rebuild()
             return {"deleted": len(unique_ids)}
         except Exception as e:
             logger.warning(f"删除失败: {e}")
@@ -565,12 +634,52 @@ class MemoryEngine:
     # ── 维护 ────────────────────────────────
 
     def stats(self) -> Dict[str, Any]:
-        """统计信息。"""
+        """统计信息（运维面板）。"""
+        total = self._collection.count()
+        archived = self._archive.count()
+
+        # 按 tag / source 分类分布
+        tag_counts: Dict[str, int] = {}
+        source_counts: Dict[str, int] = {}
+        without_ttl = 0
+        without_expire_at = 0
+        oldest_ts: Optional[str] = None
+        newest_ts: Optional[str] = None
+
+        if total > 0:
+            all_data = self._collection.get(include=["metadatas"])
+            for meta in all_data["metadatas"]:
+                meta = meta or {}
+                # 分类统计
+                tags = self._parse_tags(meta.get("tags", ""))
+                for t in tags:
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+                src = meta.get("source", "unknown")
+                source_counts[src] = source_counts.get(src, 0) + 1
+                # 字段完整性
+                if "ttl_days" not in meta:
+                    without_ttl += 1
+                if "expire_at" not in meta:
+                    without_expire_at += 1
+                # 时间范围
+                created = meta.get("created_at", "")
+                if created:
+                    if oldest_ts is None or created < oldest_ts:
+                        oldest_ts = created
+                    if newest_ts is None or created > newest_ts:
+                        newest_ts = created
+
         return {
-            "total_memories": self._collection.count(),
-            "archived_memories": self._archive.count(),
+            "total_memories": total,
+            "archived_memories": archived,
             "device": self._device,
             "data_dir": self._data_dir,
+            "tag_distribution": tag_counts,
+            "source_distribution": source_counts,
+            "without_ttl_count": without_ttl,
+            "without_expire_at_count": without_expire_at,
+            "oldest_memory": oldest_ts or "",
+            "newest_memory": newest_ts or "",
         }
 
     def cleanup(self) -> Dict[str, int]:
@@ -599,6 +708,7 @@ class MemoryEngine:
 
         for i, (doc, meta) in enumerate(zip(all_data["documents"], all_data["metadatas"])):
             try:
+                self._ensure_ner()
                 with self._ner_lock:
                     entities = self._ner.predict_entities(doc, DEFAULT_ENTITY_LABELS, threshold=0.3)
             except Exception:
@@ -693,8 +803,19 @@ class MemoryEngine:
                 if ttl is None:
                     ttl = DEFAULT_TTL_DAYS
 
-            age_days = (now - created).days
-            if age_days > ttl:
+            # 优先使用 expire_at 快捷判断，兼容旧记录回退到 age_days 计算
+            expire_str = meta.get("expire_at", "")
+            if expire_str:
+                try:
+                    expire_dt = datetime.fromisoformat(expire_str.replace("Z", "+00:00"))
+                    if expire_dt.tzinfo is None:
+                        expire_dt = expire_dt.replace(tzinfo=timezone.utc)
+                    expired = now > expire_dt
+                except Exception:
+                    expired = (now - created).days > ttl
+            else:
+                expired = (now - created).days > ttl
+            if expired:
                 # 更新 last_accessed_at（如果有）
                 meta["archived_at"] = now.isoformat()
                 to_archive_ids.append(mid)
@@ -717,6 +838,7 @@ class MemoryEngine:
             )
             # 从活跃集合删除
             self._collection.delete(ids=to_archive_ids)
+            self._schedule_graph_rebuild()
 
         return {"archived": len(to_archive_ids),
                 "remaining": self._collection.count(),
@@ -742,6 +864,7 @@ class MemoryEngine:
             embeddings=data["embeddings"], metadatas=metas,
         )
         self._archive.delete(ids=mem_ids)
+        self._schedule_graph_rebuild()
         return {"restored": len(data["ids"]), "remaining_archive": self._archive.count()}
 
     def search_archived(self, text: str, top_k: int = 5,
@@ -799,11 +922,29 @@ class MemoryEngine:
             meta["ttl_days"] = str(ttl)
             if "last_accessed_at" not in meta:
                 meta["last_accessed_at"] = meta.get("created_at", "")
+            # 同步计算 expire_at
+            if "expire_at" not in meta:
+                created_str = meta.get("created_at", "")
+                if created_str:
+                    from datetime import timedelta
+                    try:
+                        created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                        if created_dt.tzinfo is None:
+                            created_dt = created_dt.replace(tzinfo=timezone.utc)
+                        expire_dt = created_dt + timedelta(days=ttl)
+                        meta["expire_at"] = expire_dt.isoformat()
+                    except Exception:
+                        pass
             self._collection.update(ids=[mid], metadatas=[meta])
             updated += 1
         return {"backfilled": updated, "total": self._collection.count()}
 
     # ── 内部工具 ──────────────────────────────
+
+    @staticmethod
+    def _entry_to_dict(entry: MemoryEntry) -> Dict[str, Any]:
+        """MemoryEntry → dict（API 序列化）。"""
+        return entry.to_dict()
 
     @staticmethod
     def _parse_tags(raw: str) -> List[str]:
