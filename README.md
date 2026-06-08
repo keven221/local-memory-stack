@@ -282,3 +282,69 @@ launchctl load ~/Library/LaunchAgents/local-memory-stack.plist
 ---
 
 ---
+
+## 十、v0.2 新增功能
+
+### 🔒 TTL 自动归档
+
+记忆自动带 TTL（存活时间），超龄后归档到独立集合。**归档 ≠ 删除**，归档的记忆不注入上下文但随时能搜回来。
+
+| 标签 | TTL | 例子 |
+|------|-----|------|
+| `temporary` | 30天 | "周末约了朋友" |
+| `dynamic` | 180天 | 项目/计划 |
+| `static/preference` | 365天 | 身份/偏好 |
+| 无标签 | 180天 | 默认 |
+
+```bash
+# 归档 API
+curl -X POST http://127.0.0.1:8900/memory/archive -d '{"dry_run": true}'  # 预览
+curl -X POST http://127.0.0.1:8900/memory/archive -d '{"dry_run": false}'  # 执行
+
+# 同时搜活跃 + 归档
+curl -X POST http://127.0.0.1:8900/memory/search_all \
+  -H "Content-Type: application/json" \
+  -d '{"text": "搜索内容", "top_k": 5}'
+
+# 从归档恢复
+curl -X POST http://127.0.0.1:8900/memory/archive/restore \
+  -H "Content-Type: application/json" \
+  -d '{"ids": ["mem_xxx"]}'
+
+# 维护脚本
+python3 memory_ttl_cleanup.py --stats      # 统计
+python3 memory_ttl_cleanup.py              # dry-run
+python3 memory_ttl_cleanup.py --execute    # 执行归档
+```
+
+### 📬 文件邮箱（Agent 间零依赖消息传递）
+
+纯文件系统消息队列，无守护进程，无网络依赖。
+
+```python
+from mailbox import Mailbox
+
+mb = Mailbox()
+mb.send("cron-research", subject="发现", body="详细内容", sender="agent")
+msgs = mb.list("cron-research", status="unread")
+msg = mb.read("cron-research")   # 自动标记已读
+mb.ack("cron-research", msg["id"])
+```
+
+消息存储在 `~/.hermes/mailbox/<box>/msg_xxx.json`，默认 72 小时过期。
+
+### 🔍 混合检索 + 图引导检索
+
+```bash
+# 混合检索（向量 + BM25 + RRF 融合）
+python3 hybrid_search.py "搜索内容"
+
+# 图引导检索（聚类 + Hub匹配 + 邻居扩展，3-157x 加速）
+python3 graph_retrieval.py "搜索内容"
+```
+
+### 📊 维护脚本
+
+```bash
+python3 maintenance.py  # 事实冲突检测 + 低频衰减 + 语义去重 + LLM审核
+```

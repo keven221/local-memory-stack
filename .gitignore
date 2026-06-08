@@ -25,5 +25,10 @@ Thumbs.db
 logs/
 *.log
 
+# Memory backups may contain private user data
+backups/
+
 # Test outputs
 *.heapsnapshot
+graph_index.json
+venv/
