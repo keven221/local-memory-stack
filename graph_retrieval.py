@@ -66,7 +66,9 @@ class GraphRetriever:
             self.index = {"nodes": {}, "clusters": {}, "hubs": [], "adjacency": {}}
             return
 
-        col = collections[0]
+        col = client.get_or_create_collection(
+            name="memories", metadata={"hnsw:space": "cosine"}
+        )
         data = col.get(include=["documents", "metadatas", "embeddings"])
         ids = data["ids"]
         docs = data["documents"]
@@ -75,6 +77,13 @@ class GraphRetriever:
 
         n = len(ids)
         print(f"   {n} 条记忆，计算相似度矩阵...")
+
+        if n == 0:
+            self.index = {"nodes": {}, "clusters": {}, "hubs": [], "adjacency": {}}
+            with open(INDEX_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.index, f, ensure_ascii=False, indent=2)
+            print("   ⚠️ 无记忆，保存空索引")
+            return
 
         # 归一化 + 余弦相似度
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)

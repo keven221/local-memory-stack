@@ -315,6 +315,9 @@ class MemoryEngine:
         if auto_extract:
             self._extract_async(mem_id, text)
 
+        # 写入成功后异步重建图索引（不阻塞返回）
+        self._rebuild_graph_index_async()
+
         return {"id": mem_id, "text": text[:200], "action": "added", "metadata": meta}
 
     def _flag_for_review(self, existing_id, existing_text, existing_meta,
@@ -395,6 +398,82 @@ class MemoryEngine:
                     similarity=round(sim, 4),
                 ))
         return entries
+
+    # ── Reranker（精排）───────────────────────
+
+    def query_with_rerank(self, text: str, top_k: int = 3,
+                          retrieve_k: int = 10, threshold: float = 0.3,
+                          source: Optional[str] = None) -> List[MemoryEntry]:
+        """两阶段检索：HNSW 粗筛 → BGE-M3 精排。
+
+        Phase 1: ChromaDB HNSW 快速召回 retrieve_k 条候选
+        Phase 2: BGE-M3 精确计算 query 与每条候选的余弦相似度，重排序取 top_k
+
+        为什么需要 rerank：
+        - HNSW 是近似最近邻，距离不精确（尤其在高维空间）
+        - Reranker 用精确向量距离重排，减少不相关结果
+        - 适合 retrieve_k=10 → top_k=3 的场景
+
+        Args:
+            text: 查询文本
+            top_k: 最终返回条数
+            retrieve_k: 粗筛候选数（>= top_k）
+            threshold: 最低相似度阈值
+            source: 可选来源过滤
+        """
+        # Phase 1: HNSW 粗筛
+        candidates = self.query(text, top_k=retrieve_k, threshold=threshold, source=source)
+        if len(candidates) <= top_k:
+            return candidates
+
+        # Phase 2: BGE-M3 精确重排
+        query_vec = self._encoder.encode([text], normalize_embeddings=True)[0]
+
+        # 收集候选的原始 embedding（从 ChromaDB 取）
+        candidate_ids = [c.id for c in candidates]
+        raw = self._collection.get(ids=candidate_ids, include=["embeddings"])
+
+        reranked = []
+        for i, (entry, embed) in enumerate(zip(candidates, raw["embeddings"])):
+            if embed is None:
+                reranked.append((entry, entry.similarity))
+                continue
+            # 精确余弦相似度（embedding 已归一化，点积=余弦）
+            import numpy as np
+            precise_sim = float(np.dot(query_vec, np.array(embed)))
+            entry.similarity = round(precise_sim, 4)
+            reranked.append((entry, precise_sim))
+
+        # 按精确相似度降序排列，取 top_k
+        reranked.sort(key=lambda x: x[1], reverse=True)
+        return [entry for entry, _ in reranked[:top_k]]
+
+    # ── 图索引自动重建 ────────────────────────
+
+    def _rebuild_graph_index_async(self):
+        """后台异步重建图索引。"""
+        def _run():
+            try:
+                import subprocess
+                import sys as _sys
+                venv_python = os.path.join(
+                    os.path.expanduser("~/projects/local-memory-stack"), "venv", "bin", "python3"
+                )
+                python = venv_python if os.path.exists(venv_python) else _sys.executable
+                result = subprocess.run(
+                    [python, "graph_retrieval.py", "--rebuild"],
+                    cwd=os.path.expanduser("~/projects/local-memory-stack"),
+                    capture_output=True, text=True, timeout=60,
+                )
+                if result.returncode == 0:
+                    logger.info("图索引重建完成")
+                else:
+                    logger.warning(f"图索引重建失败: {result.stderr[:200]}")
+            except Exception as e:
+                logger.warning(f"图索引重建异常: {e}")
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
 
     # ── 实体提取 ────────────────────────────
 

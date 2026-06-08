@@ -29,6 +29,14 @@ class QueryRequest(BaseModel):
     source: Optional[str] = None
 
 
+class RerankRequest(BaseModel):
+    text: str
+    top_k: int = 3
+    retrieve_k: int = 10
+    threshold: float = 0.3
+    source: Optional[str] = None
+
+
 class EntityRequest(BaseModel):
     text: str
     labels: list[str] = ["person", "location", "organization", "money", "technology", "date", "event"]
@@ -97,6 +105,34 @@ async def query_memory(req: QueryRequest):
             for e in entries
         ],
         "count": len(entries),
+    }
+
+
+@app.post("/memory/query_rerank")
+async def query_rerank(req: RerankRequest):
+    """两阶段检索：HNSW 粗筛 → BGE-M3 精排。"""
+    entries = engine.query_with_rerank(
+        req.text, top_k=req.top_k, retrieve_k=req.retrieve_k,
+        threshold=req.threshold, source=req.source,
+    )
+    return {
+        "query": req.text,
+        "results": [
+            {
+                "id": e.id,
+                "text": e.text,
+                "similarity": e.similarity,
+                "metadata": {
+                    "source": e.source,
+                    "tags": e.tags,
+                    "entities": e.entities,
+                },
+            }
+            for e in entries
+        ],
+        "count": len(entries),
+        "reranked": True,
+        "retrieve_k": req.retrieve_k,
     }
 
 
